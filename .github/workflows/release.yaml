@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    uses: ./.github/workflows/check.yaml
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          version: 2026.7.5
+          install: true
+          install_args: --locked go
+          cache: true
+      - run: mise run --skip-tools build
+      - name: Verify release version and clean source
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          manifest = json.loads(Path("dist/manifest.json").read_text())
+          assert manifest["version"] == os.environ["GITHUB_REF_NAME"]
+          assert manifest["sourceRevision"] == os.environ["GITHUB_SHA"]
+          assert manifest["sourceDirty"] is False
+          PY
+      - name: Publish the dedicated OCI image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          trap 'docker logout ghcr.io >/dev/null 2>&1' EXIT
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          image="ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME}"
+          docker build --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$GITHUB_REF_NAME" -t "$image" dist/
+          docker push "$image"
+          docker inspect --format '{{index .RepoDigests 0}}' "$image" >dist/image.txt
+      - name: Publish checksums and installation metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
+            --generate-notes dist/openbao-plugin-secrets-omni dist/manifest.json \
+            dist/SHA256SUMS dist/plugin.hcl dist/image.txt

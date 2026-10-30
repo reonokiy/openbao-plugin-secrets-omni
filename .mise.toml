@@ -1,0 +1,22 @@
+[tools]
+go = "1.27.1"
+openbao = "2.7.1"
+actionlint = "1.7.12"
+shellcheck = "0.11.0"
+
+[tasks.build]
+description = "Build the static Linux amd64 plugin and public checksum manifest"
+run = "python3 build.py"
+
+[tasks.test]
+description = "Verify authorization, issuance, expiry and cleanup with the race detector"
+run = "go test -race ./..."
+
+[tasks.integration]
+description = "Load the real plugin in isolated OpenBao against a mock TLS Omni API"
+depends = ["build"]
+env = { OPENBAO_OMNI_PLUGIN = "{{config_root}}/dist/openbao-plugin-secrets-omni" }
+run = "go test -count=1 -run TestPluginInOpenBao -v ."
+
+[tasks.lint]
+run = ["go vet ./...", "actionlint"]
